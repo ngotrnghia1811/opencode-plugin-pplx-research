@@ -1,0 +1,24 @@
+# Auth cookies — must never be committed (OQ-2)
+python-agent/storage/
+storage/
+
+# Generated reports
+reports/
+
+# Python artifacts (postinstall may create these — OQ-8)
+__pycache__/
+*.pyc
+.venv/
+python-agent/__pycache__/
+python-agent/.venv/
+python-agent/*.pyc
+
+# Camoufox browser — downloaded by postinstall (stored in XDG cache, outside repo)
+# python -m camoufox fetch stores binaries in ~/.cache/camoufox or XDG_CACHE_HOME/camoufox/
+# These stay outside the repo; no local path to ignore
+
+# Build output
+dist/
+
+# Node (already covered by npm, but explicit)
+node_modules/

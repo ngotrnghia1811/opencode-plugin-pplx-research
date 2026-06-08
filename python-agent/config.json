@@ -1,0 +1,29 @@
+{
+  "provider": "perplexity",
+  "agent_class": "PerplexityResearchAgent",
+  "config_class": "PerplexityResearchConfig",
+  "config_kwargs": {
+    "headless": true,
+    "timeout": 60,
+    "storage_state": "",
+    "extract_citations": true,
+    "research_mode": "auto",
+    "output_dir": "reports/",
+    "max_research_wait": 300
+  },
+  "capabilities": [
+    "research",
+    "citations",
+    "deep_research"
+  ],
+  "_metadata": {
+    "created": "2026-04-30T17:11:37.818800",
+    "agent_module": "universal_agents.providers.pplx.research",
+    "config_module": "universal_agents.providers.pplx.config",
+    "transport": "browser"
+  },
+  "research": {
+    "output_dir": "reports/",
+    "max_research_wait": 300
+  }
+}

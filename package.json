@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "version": "0.1.0",
+  "name": "@opencode-ai/plugin-pplx-research",
+  "type": "module",
+  "license": "MIT",
+  "private": true,
+  "description": "opencode plugin: Perplexity Deep Research via browser automation (standalone npm package — set private:false before publishing)",
+  "scripts": {
+    "test": "bun test --timeout 30000",
+    "typecheck": "tsgo --noEmit",
+    "postinstall": "node scripts/bootstrap-python.mjs"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./server": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "devDependencies": {
+    "@tsconfig/bun": "catalog:",
+    "@types/bun": "catalog:",
+    "@typescript/native-preview": "catalog:"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "workspace:*"
+  },
+  "optionalDependencies": {
+    "playwright": ">=1.40"
+  },
+  "_comments": {
+    "standaloneNpm": "This package is intended as a standalone npm package (OQ-3). Keep private:true during dev; set to false before publishing. Installed by end users via the plugin array in opencode.json.",
+    "postinstall": "The postinstall script bootstraps Python deps (camoufox, etc.) with graceful degradation on failure (OQ-8). Design: detect Python → pip install -r requirements.txt → python -m camoufox fetch. Each step warns and continues on failure (exit 0). Only exit non-zero for truly unrecoverable states. See scripts/bootstrap-python.mjs.",
+    "bundledPythonAgent": "The Python agent lives under python-agent/ alongside this package. Ships inside the npm package (OQ-7). The postinstall bootstraps its dependencies.",
+    "optionalDependencies.playwright": "Only needed for Option A (TS Playwright in-process). For v1 Option B (shell to Python), this is unused but listed for future migration.",
+    "deps": "zod comes transitively via @opencode-ai/plugin which re-exports tool.schema as z. If we need zod directly for config parsing, add it as an explicit dep."
+  }
+}
