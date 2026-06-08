@@ -42,6 +42,13 @@ export const PplxResearchPlugin: Plugin = async (pluginCtx, options) => {
   // (ToolContext does not have $ — only PluginInput does.)
   const $ = pluginCtx.$
 
+  // ── Resolve paths early for bootstrap + tool closures ────────
+  const agentDir = opts.agentPath ?? path.join(import.meta.dir!, "..", "python-agent")
+  const pluginDir = path.join(import.meta.dir!, "..")
+
+  // Ensure Python environment is bootstrapped (postinstall doesn't run in opencode)
+  await ensurePythonEnv(agentDir, pluginDir)
+
   // ── Inline login helper (closes over $, opts) ────────────────
   /**
    * Launch the Python agent in login mode (headed browser, DOM-poll).
@@ -76,6 +83,58 @@ export const PplxResearchPlugin: Plugin = async (pluginCtx, options) => {
     return result.exitCode === 0
   }
 
+  /**
+   * Bootstrap the Python agent environment at plugin init time.
+   *
+   * Runs `scripts/bootstrap-python.mjs` which does:
+   *   1. Detect Python ≥3.10
+   *   2. pip install -r python-agent/requirements.txt
+   *   3. python -m camoufox fetch
+   *
+   * opencode skips postinstall (`ignoreScripts: true` in Arborist), so we
+   * must bootstrap at runtime.  Fast-path: skip if .venv already exists.
+   *
+   * Never throws — if bootstrap fails, the tool execute blocks will surface
+   * clear "Python not found" errors to the user.
+   */
+  async function ensurePythonEnv(agentDir: string, pluginDir: string): Promise<void> {
+    const venvPython = path.join(agentDir, ".venv", "bin", "python")
+    if (fs.existsSync(venvPython)) {
+      console.log("[pplx-research] Python venv found, skipping bootstrap")
+      return
+    }
+
+    console.warn("[pplx-research] Python venv not found — running bootstrap (may take 1-3 minutes)...")
+
+    const bootstrapScript = path.join(pluginDir, "scripts", "bootstrap-python.mjs")
+    if (!fs.existsSync(bootstrapScript)) {
+      console.warn(`[pplx-research] Bootstrap script not found at ${bootstrapScript}`)
+      return
+    }
+
+    try {
+      const shell = $.cwd(agentDir)
+      const proc = shell`${opts.pythonBin} ${bootstrapScript}`.nothrow()
+
+      // Wait up to 5 minutes for bootstrap (camoufox fetch downloads ~300MB)
+      const timeout = new Promise<{ exitCode: number }>((resolve) => {
+        setTimeout(() => resolve({ exitCode: -1 }), 300_000)
+      })
+      const result = await Promise.race([proc, timeout])
+
+      if (fs.existsSync(venvPython)) {
+        console.log("[pplx-research] Python bootstrap complete — venv created")
+      } else {
+        console.warn("[pplx-research] Bootstrap ran but .venv was not created. Manual setup may be needed.")
+        if (result.exitCode !== 0 && result.exitCode !== -1) {
+          console.warn(`[pplx-research] Bootstrap exited with code ${result.exitCode}`)
+        }
+      }
+    } catch (err) {
+      console.warn(`[pplx-research] Bootstrap error: ${err}`)
+    }
+  }
+
   return {
     tool: {
       // ── pplx_research ──────────────────────────────────────────
@@ -100,7 +159,6 @@ export const PplxResearchPlugin: Plugin = async (pluginCtx, options) => {
           })
 
           // ── Resolve paths ────────────────────────────────────
-          const agentDir = opts.agentPath ?? path.join(import.meta.dir!, "..", "python-agent")
           const agentScript = path.join(agentDir, "agent.py")
           const outputDir = args.output_dir ?? path.join(toolCtx.directory, opts.outputDir)
           const storageState = path.join(agentDir, "storage", "pplx_storage_state.json")
@@ -230,7 +288,6 @@ export const PplxResearchPlugin: Plugin = async (pluginCtx, options) => {
         args: {},
 
         async execute(_args, toolCtx) {
-          const agentDir = opts.agentPath ?? path.join(import.meta.dir!, "..", "python-agent")
           const agentScript = path.join(agentDir, "agent.py")
 
           if (!fs.existsSync(agentScript)) {
