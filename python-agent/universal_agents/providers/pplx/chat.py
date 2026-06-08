@@ -3,14 +3,32 @@
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from urllib.parse import urlparse
 
-from playwright.async_api import Page
+if TYPE_CHECKING:
+    from playwright.async_api import Page
 
 from ...browser.base_browser_agent import BaseBrowserAgent
 from .config import PerplexityConfig
 from .selectors import CITATION_SELECTORS, PPLX_SELECTORS
+
+# Lazily imported — PerplexityChatAgent uses this, but the import is heavy
+# and breaks `camoufox`-only installations. Only resolved inside the class.
+_playwright_page = None
+
+def _get_page_type():
+    global _playwright_page
+    if _playwright_page is None:
+        try:
+            from camoufox import Camoufox
+            _playwright_page = type(Camoufox)  # placeholder — actual Page from Camoufox's playwright vendoring
+            from playwright.async_api import Page as _Page
+            _playwright_page = _Page
+        except ImportError:
+            from playwright.async_api import Page as _Page
+            _playwright_page = _Page
+    return _playwright_page
 
 logger = logging.getLogger(__name__)
 
