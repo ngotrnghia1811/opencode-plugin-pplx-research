@@ -49,6 +49,10 @@ export const PplxResearchPlugin: Plugin = async (pluginCtx, options) => {
   // Ensure Python environment is bootstrapped (postinstall doesn't run in opencode)
   await ensurePythonEnv(agentDir, pluginDir)
 
+  // Prefer .venv Python if it exists, otherwise fall back to user-configured pythonBin
+  const venvPython = path.join(agentDir, ".venv", "bin", "python")
+  const pythonBin = fs.existsSync(venvPython) ? venvPython : opts.pythonBin
+
   // ── Inline login helper (closes over $, opts) ────────────────
   /**
    * Launch the Python agent in login mode (headed browser, DOM-poll).
@@ -62,7 +66,7 @@ export const PplxResearchPlugin: Plugin = async (pluginCtx, options) => {
    */
   async function runInlineLogin(agentDir: string, abort: AbortSignal): Promise<boolean> {
     const shell = $.cwd(agentDir)
-    const proc = shell`${opts.pythonBin} agent.py --login`.nothrow()
+    const proc = shell`${pythonBin} agent.py --login`.nothrow()
 
     const abortPromise = new Promise<never>((_, reject) => {
       if (abort.aborted) {
@@ -114,7 +118,7 @@ export const PplxResearchPlugin: Plugin = async (pluginCtx, options) => {
 
     try {
       const shell = $.cwd(agentDir)
-      const proc = shell`${opts.pythonBin} ${bootstrapScript}`.nothrow()
+      const proc = shell`${pythonBin} ${bootstrapScript}`.nothrow()
 
       // Wait up to 5 minutes for bootstrap (camoufox fetch downloads ~300MB)
       const timeout = new Promise<{ exitCode: number }>((resolve) => {
@@ -190,7 +194,7 @@ export const PplxResearchPlugin: Plugin = async (pluginCtx, options) => {
                 "pplx_research: Login required. The auto-login flow did not succeed.",
                 "This may be because no display is available (headless/remote/serve mode).",
                 "Run the `pplx_login` tool on a machine with a display, or manually:",
-                `  cd ${agentDir} && ${opts.pythonBin} agent.py --login`,
+                `  cd ${agentDir} && ${pythonBin} agent.py --login`,
               ].join("\n")
             }
 
@@ -214,7 +218,7 @@ export const PplxResearchPlugin: Plugin = async (pluginCtx, options) => {
 
           // Race the subprocess against the abort signal
           const shell = $.cwd(agentDir)
-          const proc = shell`${opts.pythonBin} agent.py ${args.query} --mode ${args.mode} --output ${outputDir}`.nothrow()
+          const proc = shell`${pythonBin} agent.py ${args.query} --mode ${args.mode} --output ${outputDir}`.nothrow()
 
           const abortPromise = new Promise<never>((_, reject) => {
             if (toolCtx.abort.aborted) {
@@ -310,7 +314,7 @@ export const PplxResearchPlugin: Plugin = async (pluginCtx, options) => {
 
           // Run login subprocess
           const shell = $.cwd(agentDir)
-          const proc = shell`${opts.pythonBin} agent.py --login`.nothrow()
+    const proc = shell`${pythonBin} agent.py --login`.nothrow()
 
           const abortPromise = new Promise<never>((_, reject) => {
             if (toolCtx.abort.aborted) {
@@ -363,7 +367,7 @@ export const PplxResearchPlugin: Plugin = async (pluginCtx, options) => {
             "The agent reported success but the storage state was not written.",
             "Try again or run manually:",
             "",
-            `  cd ${agentDir} && ${opts.pythonBin} agent.py --login`,
+            `  cd ${agentDir} && ${pythonBin} agent.py --login`,
             "",
             "---",
             "<details><summary>Agent output</summary>",
