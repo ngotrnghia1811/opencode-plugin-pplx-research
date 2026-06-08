@@ -1,11 +1,11 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "version": "0.1.0",
-  "name": "@opencode-ai/plugin-pplx-research",
+  "name": "@ngotrnghia1811/plugin-pplx-research",
   "type": "module",
   "license": "MIT",
-  "private": true,
-  "description": "opencode plugin: Perplexity Deep Research via browser automation (standalone npm package — set private:false before publishing)",
+  "private": false,
+  "description": "opencode plugin: Perplexity Deep Research via Camoufox browser automation",
   "scripts": {
     "test": "bun test --timeout 30000",
     "typecheck": "tsgo --noEmit",
@@ -22,7 +22,7 @@
     "@typescript/native-preview": "catalog:"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "workspace:*"
+    "@opencode-ai/plugin": "*"
   },
   "optionalDependencies": {
     "playwright": ">=1.40"
