@@ -66,7 +66,7 @@ export const PplxResearchPlugin: Plugin = async (pluginCtx, options) => {
    */
   async function runInlineLogin(agentDir: string, abort: AbortSignal): Promise<boolean> {
     const shell = $.cwd(agentDir)
-    const proc = shell`${pythonBin} agent.py --login`.nothrow()
+    const proc = shell`${pythonBin} agent.py --login`.nothrow().quiet()
 
     const abortPromise = new Promise<never>((_, reject) => {
       if (abort.aborted) {
@@ -118,7 +118,7 @@ export const PplxResearchPlugin: Plugin = async (pluginCtx, options) => {
 
     try {
       const shell = $.cwd(agentDir)
-      const proc = shell`${pythonBin} ${bootstrapScript}`.nothrow()
+      const proc = shell`${pythonBin} ${bootstrapScript}`.nothrow().quiet()
 
       // Wait up to 5 minutes for bootstrap (camoufox fetch downloads ~300MB)
       const timeout = new Promise<{ exitCode: number }>((resolve) => {
@@ -216,22 +216,86 @@ export const PplxResearchPlugin: Plugin = async (pluginCtx, options) => {
             })
           }, 10000)
 
-          // Race the subprocess against the abort signal
-          const shell = $.cwd(agentDir)
-          const proc = shell`${pythonBin} agent.py ${args.query} --mode ${args.mode} --output ${outputDir}`.nothrow()
+          // Stream subprocess stdout to chat pane via Bun.spawn
+          const proc = Bun.spawn([pythonBin, "agent.py", args.query, "--mode", args.mode, "--output", outputDir], {
+            cwd: agentDir,
+            stdout: "pipe",
+            stderr: "pipe",
+          })
 
           const abortPromise = new Promise<never>((_, reject) => {
             if (toolCtx.abort.aborted) {
+              proc.kill()
               reject(new Error("Research aborted"))
               return
             }
-            const onAbort = () => reject(new Error("Research aborted"))
+            const onAbort = () => {
+              proc.kill()
+              reject(new Error("Research aborted"))
+            }
             toolCtx.abort.addEventListener("abort", onAbort, { once: true })
           })
 
+          const runPromise = (async () => {
+            const stdoutChunks: Buffer[] = []
+            const stderrChunks: Buffer[] = []
+            const decoder = new TextDecoder()
+            let stdoutRemainder = ""
+            let stderrRemainder = ""
+            let accumulatedOutput = ""
+
+            const updateOutput = (line: string) => {
+              accumulatedOutput += line + "\n"
+              // Show last 300 chars like shell tool does with preview()
+              const output = accumulatedOutput.length > 300
+                ? accumulatedOutput.slice(-300)
+                : accumulatedOutput
+              toolCtx.metadata({
+                title: "Researching…",
+                metadata: { output: output.trim() },
+              })
+            }
+
+            const readStdout = (async () => {
+              for await (const chunk of proc.stdout) {
+                const buf = Buffer.from(chunk)
+                stdoutChunks.push(buf)
+                const text = decoder.decode(chunk)
+                stdoutRemainder += text
+                const lines = stdoutRemainder.split("\n")
+                stdoutRemainder = lines.pop() ?? ""
+                for (const line of lines) {
+                  if (line.trim()) updateOutput(line.trim())
+                }
+              }
+            })()
+
+            const readStderr = (async () => {
+              for await (const chunk of proc.stderr) {
+                stderrChunks.push(Buffer.from(chunk))
+                const text = decoder.decode(chunk)
+                stderrRemainder += text
+                const lines = stderrRemainder.split("\n")
+                stderrRemainder = lines.pop() ?? ""
+                for (const line of lines) {
+                  if (line.trim()) updateOutput(line.trim())
+                }
+              }
+            })()
+
+            await Promise.all([readStdout, readStderr])
+            const exitCode = await proc.exited
+
+            return {
+              stdout: Buffer.concat(stdoutChunks),
+              stderr: Buffer.concat(stderrChunks),
+              exitCode,
+            }
+          })()
+
           let result: { readonly stdout: Buffer; readonly stderr: Buffer; readonly exitCode: number }
           try {
-            result = await Promise.race([proc, abortPromise])
+            result = await Promise.race([runPromise, abortPromise])
           } catch (err) {
             clearInterval(statusInterval)
             return `pplx_research: ${err instanceof Error ? err.message : "Aborted"}`
@@ -312,22 +376,85 @@ export const PplxResearchPlugin: Plugin = async (pluginCtx, options) => {
             },
           })
 
-          // Run login subprocess
-          const shell = $.cwd(agentDir)
-    const proc = shell`${pythonBin} agent.py --login`.nothrow()
+          // Stream login progress to chat pane via Bun.spawn
+          const proc = Bun.spawn([pythonBin, "agent.py", "--login"], {
+            cwd: agentDir,
+            stdout: "pipe",
+            stderr: "pipe",
+          })
 
           const abortPromise = new Promise<never>((_, reject) => {
             if (toolCtx.abort.aborted) {
+              proc.kill()
               reject(new Error("Login aborted"))
               return
             }
-            const onAbort = () => reject(new Error("Login aborted"))
+            const onAbort = () => {
+              proc.kill()
+              reject(new Error("Login aborted"))
+            }
             toolCtx.abort.addEventListener("abort", onAbort, { once: true })
           })
 
+          const runPromise = (async () => {
+            const stdoutChunks: Buffer[] = []
+            const stderrChunks: Buffer[] = []
+            const decoder = new TextDecoder()
+            let stdoutRemainder = ""
+            let stderrRemainder = ""
+            let accumulatedOutput = ""
+
+            const updateOutput = (line: string) => {
+              accumulatedOutput += line + "\n"
+              const output = accumulatedOutput.length > 300
+                ? accumulatedOutput.slice(-300)
+                : accumulatedOutput
+              toolCtx.metadata({
+                title: "Login…",
+                metadata: { output: output.trim() },
+              })
+            }
+
+            const readStdout = (async () => {
+              for await (const chunk of proc.stdout) {
+                const buf = Buffer.from(chunk)
+                stdoutChunks.push(buf)
+                const text = decoder.decode(chunk)
+                stdoutRemainder += text
+                const lines = stdoutRemainder.split("\n")
+                stdoutRemainder = lines.pop() ?? ""
+                for (const line of lines) {
+                  if (line.trim()) updateOutput(line.trim())
+                }
+              }
+            })()
+
+            const readStderr = (async () => {
+              for await (const chunk of proc.stderr) {
+                stderrChunks.push(Buffer.from(chunk))
+                const text = decoder.decode(chunk)
+                stderrRemainder += text
+                const lines = stderrRemainder.split("\n")
+                stderrRemainder = lines.pop() ?? ""
+                for (const line of lines) {
+                  if (line.trim()) updateOutput(line.trim())
+                }
+              }
+            })()
+
+            await Promise.all([readStdout, readStderr])
+            const exitCode = await proc.exited
+
+            return {
+              stdout: Buffer.concat(stdoutChunks),
+              stderr: Buffer.concat(stderrChunks),
+              exitCode,
+            }
+          })()
+
           let result: { readonly stdout: Buffer; readonly stderr: Buffer; readonly exitCode: number }
           try {
-            result = await Promise.race([proc, abortPromise])
+            result = await Promise.race([runPromise, abortPromise])
           } catch (err) {
             return `pplx_login: ${err instanceof Error ? err.message : "Aborted"}`
           }

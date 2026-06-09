@@ -1,7 +1,10 @@
 """Perplexity deep research agent — browser automation with Deep Research mode."""
 
 import logging
+import shutil
+import tempfile
 import time
+import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -317,11 +320,21 @@ class PerplexityResearchAgent(BaseBrowserAgent):
             is_deep=mode_used == "deep",
         )
 
-        # Get clean text with proper inline citations
-        response_text = await self._get_clean_response_text(page, raw_response_text)
-
-        # 6. Extract citations
+        # 5a. Extract citations FIRST (while page is in clean post-research state,
+        #     before the download flow clicks buttons that may change the DOM)
         citations = await self._extract_citations(page)
+
+        # 5b. Get response content — prefer full download, fall back to clipboard
+        output_dir = Path(self._research_config.output_dir)
+        response_text = await self._download_all_documents(page, query, output_dir)
+        if response_text is None:
+            logger.info("Download all documents failed — trying HTML extraction")
+            response_text = await self._extract_html_as_markdown(page)
+        if response_text is None:
+            logger.info("HTML extraction failed — falling back to clipboard/copy")
+            response_text = await self._get_clean_response_text(page, raw_response_text)
+        else:
+            logger.info("Using content (%d chars)", len(response_text))
 
         elapsed = time.monotonic() - start
 
@@ -585,6 +598,259 @@ class PerplexityResearchAgent(BaseBrowserAgent):
         result = re.sub(r'\n{3,}', '\n\n', result)
         logger.info("Used fallback stripping for response text")
         return result.strip()
+
+    # ------------------------------------------------------------------
+    # HTML-to-markdown extraction (fallback when zip download fails)
+    # ------------------------------------------------------------------
+
+    async def _extract_html_as_markdown(self, page: Page) -> str | None:
+        """Extract the response container's HTML and convert to markdown.
+        
+        Uses Playwright JS evaluation to get innerHTML and a simple regex-based
+        converter. Returns None if the response container can't be found.
+        """
+        # Try to get the response container's innerHTML
+        try:
+            # Perplexity renders responses in a div with prose class
+            html = await page.evaluate("""
+                () => {
+                    // Try known response containers
+                    const selectors = [
+                        'div.prose',
+                        'div[class*="prose"]',
+                        '[data-testid="response-text"]',
+                        '.response-content',
+                        '.message-content',
+                        '[class*="threadContentWidth"] div.prose',
+                        '[class*="thread"] div[class*="prose"]',
+                    ];
+                    for (const sel of selectors) {
+                        const el = document.querySelector(sel);
+                        if (el && el.innerHTML.trim().length > 100) {
+                            return el.innerHTML;
+                        }
+                    }
+                    // Fallback: find the largest prose-like div
+                    const divs = document.querySelectorAll('div');
+                    let best = null;
+                    let bestLen = 0;
+                    for (const d of divs) {
+                        if (d.className && d.className.includes('prose') && d.innerHTML.length > bestLen) {
+                            best = d;
+                            bestLen = d.innerHTML.length;
+                        }
+                    }
+                    return best ? best.innerHTML : null;
+                }
+            """)
+            
+            if not html or len(html) < 100:
+                logger.debug("HTML extraction: no suitable response container found")
+                return None
+            
+            logger.info("Extracted response HTML (%d chars)", len(html))
+            
+            # Simple HTML-to-markdown conversion
+            md = self._html_to_markdown(html)
+            logger.info("Converted HTML to markdown (%d chars)", len(md))
+            return md
+            
+        except Exception as exc:
+            logger.debug("HTML extraction failed: %s", exc)
+            return None
+    
+    @staticmethod
+    def _html_to_markdown(html: str) -> str:
+        """Convert basic HTML to Markdown using regex substitutions.
+        
+        Handles common patterns: headings, bold, italic, links, lists, paragraphs.
+        No external dependencies required.
+        """
+        import re
+        
+        text = html
+        
+        # Remove script and style tags with their content
+        text = re.sub(r'<(script|style)[^>]*>.*?</\1>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        
+        # Convert headings (h1-h6)
+        for i in range(6, 0, -1):
+            text = re.sub(
+                rf'<h{i}[^>]*>(.*?)</h{i}>',
+                lambda m, level=i: f'{"#" * level} {m.group(1).strip()}\n\n',
+                text,
+                flags=re.DOTALL | re.IGNORECASE
+            )
+        
+        # Convert bold
+        text = re.sub(r'<(strong|b)[^>]*>(.*?)</\1>', r'**\2**', text, flags=re.DOTALL | re.IGNORECASE)
+        
+        # Convert italic
+        text = re.sub(r'<(em|i)[^>]*>(.*?)</\1>', r'*\2*', text, flags=re.DOTALL | re.IGNORECASE)
+        
+        # Convert links
+        text = re.sub(
+            r'<a[^>]*href=["\']([^"\']*)["\'][^>]*>(.*?)</a>',
+            r'[\2](\1)',
+            text,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        
+        # Convert unordered lists
+        text = re.sub(r'<li[^>]*>(.*?)</li>', r'- \1\n', text, flags=re.DOTALL | re.IGNORECASE)
+        
+        # Convert paragraphs to double-newline
+        text = re.sub(r'<p[^>]*>', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'</p>', '\n\n', text, flags=re.IGNORECASE)
+        
+        # Convert line breaks
+        text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
+        
+        # Remove remaining HTML tags
+        text = re.sub(r'<[^>]+>', '', text)
+        
+        # Decode common HTML entities
+        text = text.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+        text = text.replace('&quot;', '"').replace('&#39;', "'").replace('&apos;', "'")
+        text = text.replace('&nbsp;', ' ')
+        
+        # Clean up whitespace
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        text = re.sub(r' +', ' ', text)
+        text = text.strip()
+        
+        return text
+
+    # ------------------------------------------------------------------
+    # Download → All documents → .zip → extract full Markdown artifacts
+    # ------------------------------------------------------------------
+
+    async def _download_all_documents(self, page: Page, query: str, output_dir: Path) -> str | None:
+        """Download the full response as a .zip via Download → All documents.
+
+        Returns the combined markdown content, or None if download failed.
+        """
+        from .selectors import DOWNLOAD_BUTTON_SELECTORS, DOWNLOAD_ALL_DOCUMENTS_SELECTORS
+
+        logger.info("Attempting Download → All documents → .zip flow")
+
+        # Step 1: Click the Download button to open dropdown
+        for selector in DOWNLOAD_BUTTON_SELECTORS:
+            logger.debug("Trying download button selector: %s", selector)
+            # ── Find the element ─────────────────────────────────
+            el = None
+            try:
+                el = page.locator(selector).first
+                if await el.count() == 0:
+                    continue
+                if not await el.is_visible():
+                    continue
+            except Exception as exc:
+                logger.debug("Download button selector %s: %s", selector, exc)
+                continue
+
+            logger.info("Found Download button: %s", selector)
+
+            # ── Download flow (click → dropdown → zip → extract) ─
+            try:
+                # Set up download listener BEFORE clicking
+                async with page.expect_download() as download_info:
+                    await el.click()
+                    logger.info("Clicked Download button, waiting for dropdown...")
+
+                    # Wait for dropdown menu to appear
+                    try:
+                        await page.wait_for_selector('[role="menu"], [role="listbox"], [role="dialog"]', timeout=3000)
+                        logger.debug("Dropdown appeared")
+                    except Exception:
+                        logger.debug("Dropdown wait timed out — trying anyway")
+                        await page.wait_for_timeout(1000)
+
+                    # Step 2: Click "All documents" in the dropdown
+                    all_docs_clicked = False
+                    for menu_selector in DOWNLOAD_ALL_DOCUMENTS_SELECTORS:
+                        try:
+                            menu_el = page.locator(menu_selector).first
+                            if await menu_el.count() == 0:
+                                continue
+                            if not await menu_el.is_visible():
+                                continue
+                            await menu_el.click()
+                            logger.info("Clicked 'All documents', waiting for download...")
+                            all_docs_clicked = True
+                            logger.debug("Clicked All documents (%s)", menu_selector)
+                            break
+                        except Exception as exc:
+                            logger.debug("All docs selector %s: %s", menu_selector, exc)
+                            continue
+
+                    if not all_docs_clicked:
+                        logger.warning("Could not find 'All documents' menu item")
+                        return None
+
+                    # Wait for download to complete
+                    download = await download_info.value
+                    logger.info("Download started: %s", download.suggested_filename or "(unknown)")
+
+                    # Save to temp file
+                    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
+                        await download.save_as(tmp.name)
+                        zip_path = tmp.name
+
+                    logger.info("Download saved to %s", zip_path)
+
+                    # Clean artifacts dir from previous extractions to prevent duplication
+                    extract_dir = output_dir / "artifacts"
+                    if extract_dir.exists():
+                        shutil.rmtree(extract_dir)
+                        logger.debug("Cleaned previous artifacts from %s", extract_dir)
+                    extract_dir.mkdir(parents=True, exist_ok=True)
+
+                    with zipfile.ZipFile(zip_path, "r") as zf:
+                        zf.extractall(extract_dir)
+
+                    logger.info("Extracted %d files to %s, zip kept at %s",
+                                len(zf.namelist()), extract_dir, zip_path)
+
+                    # Find and read all .md files
+                    md_files = sorted(list(extract_dir.rglob("*.md")) + list(extract_dir.rglob("*.markdown")))
+                    if not md_files:
+                        # Try broader search
+                        all_files = list(extract_dir.rglob("*"))
+                        logger.warning("No .md/.markdown files in zip. Contents: %s",
+                                       [str(f.relative_to(extract_dir)) for f in all_files if f.is_file()])
+                        return None
+
+                    logger.info("Found %d .md files in zip", len(md_files))
+
+                    # Combine all .md files into one report
+                    parts = []
+                    for md_file in md_files:
+                        content = md_file.read_text(encoding="utf-8")
+                        parts.append(content)
+
+                    full_md = "\n\n".join(parts)
+                    logger.info("Combined %d .md files (%d total chars)", len(md_files), len(full_md))
+
+                    # Clean up temp zip
+                    try:
+                        Path(zip_path).unlink()
+                    except Exception:
+                        pass
+
+                    return full_md
+
+            except Exception as exc:
+                logger.debug("Download attempt failed: %s", exc)
+                # Close dropdown if still open
+                try:
+                    await page.keyboard.press("Escape")
+                except Exception:
+                    pass
+                continue
+
+        logger.warning("Could not find Download button")
+        return None
 
     # ------------------------------------------------------------------
     # Citation extraction (delegated to PerplexityChatAgent static helpers)

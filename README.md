@@ -7,7 +7,8 @@ structured Markdown research reports with citations. Citations are extracted
 from the Perplexity sources panel via the Copy button for clean Markdown output.
 
 **Integration strategy:** Shells out to an existing, battle-tested Python
-Camoufox agent via Bun's `$` shell. This keeps the plugin lightweight while
+Camoufox agent via Bun's `Bun.spawn()` with line-by-line streaming to the
+opencode chat pane. This keeps the plugin lightweight while
 reusing a selector-stable, Cloudflare-hardened implementation. See
 [DEVELOPMENT-PLAN.md](./DEVELOPMENT-PLAN.md) §3 for trade-off analysis.
 
@@ -95,7 +96,7 @@ First use auto-launches login (visible browser) if no session exists:
 
 | Tool | Description |
 |---|---|
-| `pplx_research` | Submit a research query to Perplexity. Returns a Markdown report with citations. Mode: `"search"` (fast, ~30s) or `"deep"` (Deep Research, 2–10 min, Pro tier required). Deep Research is toggled via a two-step dropdown interaction (click mode selector → click "Deep research"). |
+| `pplx_research` | Submit a research query to Perplexity. Returns a Markdown report with citations. Mode: `"standard"` (fast, ~30–60s) or `"deep"` (Deep Research, 2–10 min, Pro tier required). Deep Research is toggled via a two-step dropdown interaction (click mode selector → click "Deep research"). Full markdown artifacts are captured via Download → All documents → .zip extraction, with HTML-to-markdown fallback and clipboard copy as a last resort. |
 | `pplx_login` | Open a browser to capture a fresh Perplexity login session (manual re-auth). Auto-detects login via DOM poll — no Enter required. Uses positive indicators (profile image) and negative indicator disappearance. Supports strict and lenient detection modes. |
 
 ## Planning Docs
@@ -109,7 +110,7 @@ First use auto-launches login (visible browser) if no session exists:
 
 ## Limitations
 
-- **Latency**: Standard Search queries complete in ~30 seconds. Deep Research queries take 2–10 minutes. A status line shows elapsed time ("Researching… 45s elapsed") via `ctx.metadata()`. Full progress logs are returned at completion — opencode does not stream subprocess stdout live.
+- **Latency**: Standard Search queries complete in ~30–60 seconds. Deep Research queries take 2–10 minutes. A status line shows elapsed time ("Researching… 45s elapsed") via `ctx.metadata()`. Python agent progress logs (login detection, download flow, HTML extraction) stream to the chat pane via Bun.spawn() line-by-line output.
 - **Display required for login**: Auto-login launches a visible browser window. This only works on machines with a display (local TUI/desktop). In headless/remote/`serve` mode, login must be performed separately on a machine with a display.
 - **Deep Research requires Pro**: Deep Research mode requires a Perplexity Pro tier subscription. On free-tier accounts, the mode selector may not appear or the query will fall back to Search.
 - **Copy button requires clipboard-read**: The citation extraction strategy uses the Copy button in the Perplexity sources panel. This requires the `clipboard-read` permission in the browser. Camoufox headless mode supports this; other browser configurations may not.
@@ -119,10 +120,21 @@ First use auto-launches login (visible browser) if no session exists:
 
 ## Changelog
 
-- **Camoufox engine integration**: The Python agent uses Camoufox (patched Firefox) instead of Playwright/Chromium. A previous silent fallback to Chromium was fixed; the agent validates the Camoufox binary at startup.
-- **Login timing fix**: The browser no longer closes prematurely before login completes. A DOM polling loop (120 iterations, ~10 minutes max) detects login via positive and negative indicators.
-- **Deep Research toggle fix**: The mode selector now uses a two-step dropdown interaction (click selector → click "Deep research" in the dropdown), matching the live Perplexity DOM.
-- **Citation extraction**: Citations are extracted from the Perplexity sources panel via the Copy button, producing clean Markdown output. Requires clipboard-read permission (works in Camoufox headless mode).
-- **Selector hardening**: All CSS selectors were verified against the live Perplexity DOM (2026-06-07).
-- **Bootstrap script**: The `postinstall` script provides graceful Python + pip + Camoufox setup with actionable error messages on failure.
-- **38 unit tests passing** (`bun test`).
+- **0.1.2 (2026-06-08)** — Bug fixes:
+  - **TUI overlay fix**: Replaced Bun `$` with `Bun.spawn()` for both `pplx_research` and `pplx_login` tools. Subprocess stdout/stderr no longer overwrites the opencode TUI. Added `proc.kill()` on abort signal for clean cancellation.
+  - **Full-artifact download**: Research reports now capture complete markdown via `Download → All documents → .zip → extract` flow instead of plain-text clipboard copy. Playwright handles the download and `zipfile` extracts all `.md`/`.markdown` files.
+  - **Built-in HTML-to-markdown fallback**: When zip download fails, the plugin extracts the response container's innerHTML and does regex-based HTML→Markdown conversion as a second-tier fallback before falling back to clipboard copy.
+  - **Citation extraction fixed**: Citations are now extracted *before* the download flow (which modifies the page DOM), preventing silent citation loss.
+  - **Download hardening**: Selector breadth expanded (14 download button selectors, 12 menu selectors), `page.wait_for_selector()` replaces fixed timeouts, detailed logging at every download step.
+  - **Duplication bug fixed**: `rglob("*.md")` now cleans the artifacts directory (`shutil.rmtree`) before each extraction, preventing old report content from being concatenated into new queries.
+  - **Python logging in chat pane**: Both stdout and stderr are now decoded line-by-line and streamed to the chat pane via `ctx.metadata()` — all `logger.info()`/`logger.debug()` lines are visible during tool execution.
+  - **Metadata output key**: Fixed `ctx.metadata()` from using `progress` key (not rendered by opencode TUI) to the standard `output` key with accumulated preview (matching the built-in shell tool's `preview()` pattern).
+- **0.1.1** — Fixes:
+  - `.venv/bin/python` preferred over system Python for tool execution.
+- **0.1.0** — Initial release:
+  - Camoufox engine integration with Camoufox/Playwright double-check.
+  - Login auto-detection and DOM polling (120 iterations, ~10 min).
+  - Deep Research mode toggle via two-step dropdown interaction.
+  - Citation extraction via sources panel Copy button.
+  - Runtime Python bootstrap in `server()` hook.
+  - 38 unit tests passing (`bun test`).

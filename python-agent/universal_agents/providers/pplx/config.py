@@ -31,3 +31,4 @@ class PerplexityResearchConfig(PerplexityConfig):
     research_mode: str = "auto"
     output_dir: str = "reports/"
     max_research_wait: int = 300  # seconds (Deep Research can take 3-5 min)
+    download_full_artifacts: bool = True  # Download .zip with all documents vs clipboard-only

@@ -136,3 +136,52 @@ DEEP_RESEARCH_ACTIVE_INDICATORS = [
     '[role="menuitemradio"]:has-text("Deep research")[aria-checked="true"]',
     '[role="menuitemradio"]:has-text("Deep research")[data-state="checked"]',
 ]
+
+# ---------------------------------------------------------------------------
+# Download → "All documents" flow
+# ---------------------------------------------------------------------------
+
+# Step 1: The Download button in the response toolbar
+DOWNLOAD_BUTTON_SELECTORS = [
+    # Text-based (most reliable)
+    'button:has-text("Download")',
+    ':has-text("Download") >> button',
+    # aria-label variants
+    '[aria-label="Download"]',
+    '[aria-label*="Download" i]',
+    '[aria-label*="download" i]',
+    # data-testid fallbacks
+    '[data-testid*="download"]',
+    '[data-testid*="Download"]',
+    # Generic icon buttons that might be the download button
+    '[aria-label*="export" i]',
+    'button:has-text("Export")',
+    # SVG/title-based (some UIs use icon-only buttons with title)
+    '[title*="Download" i]',
+    '[title*="download" i]',
+    'svg[aria-label*="Download" i]',
+    # Broader: any button in the response area
+    'div[class*="response"] button',
+    'div[class*="prose"] ~ div button',
+]
+
+# Step 2: The "All documents" option in the Download dropdown
+DOWNLOAD_ALL_DOCUMENTS_SELECTORS = [
+    # Menu items (most common pattern)
+    '[role="menuitem"]:has-text("All documents")',
+    '[role="menuitem"]:has-text("all documents")',
+    '[role="option"]:has-text("All documents")',
+    '[role="option"]:has-text("all documents")',
+    # Nested patterns
+    ':has-text("All documents") >> [role="menuitem"]',
+    ':has-text("all documents") >> [role="menuitem"]',
+    # Button variants
+    'button:has-text("All documents")',
+    'button:has-text("all documents")',
+    # Generic: any element containing "All documents" text
+    ':has-text("All documents")',
+    '[aria-label*="All documents" i]',
+    # ZIP-specific mentions
+    ':has-text(".zip")',
+    '[role="menuitem"]:has-text(".zip")',
+]
